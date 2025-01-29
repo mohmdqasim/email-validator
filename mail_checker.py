@@ -46,9 +46,9 @@ def check_email_reachability(email):
 
         # Handle SMTP response codes
         if code == 250:
-            return True, "✅"
+            return True, "✅ Valid"
         elif code == 550:
-            return False, "❌"
+            return False, "❌ Invalid"
         elif code in (451, 452):
             return False, "Server temporarily unavailable. Try again later."
         else:
