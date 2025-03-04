@@ -26,8 +26,6 @@ def validate_email_syntax(email):
     return True
 
 def check_email_reachability(email):
-    print(email)
-    """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
         return False, "Invalid email syntax."
     
