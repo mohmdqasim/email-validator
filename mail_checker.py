@@ -78,7 +78,9 @@ if option == "Single Email":
     if st.button("Validate Email"):
         if email:
             start_time = time.time()
-            is_valid, message = asyncio.run(check_email_reachability(email))
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            is_valid, message = loop.run_until_complete(check_email_reachability(email))
             elapsed_time = time.time() - start_time
             
             st.write("### Results")
@@ -88,52 +90,4 @@ if option == "Single Email":
         else:
             st.error("Please enter a valid email address.")
 
-elif option == "Batch (CSV File)":
-    uploaded_file = st.file_uploader("Upload a CSV File", type=["csv"])
-    
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file)
-            email_column = None
-            for col in df.columns:
-                if col.lower() == "email":
-                    email_column = col
-                    break
-            
-            if email_column:
-                st.write(f"Found '{email_column}' column. Processing emails...")
-
-                emails = df[email_column].dropna().unique()
-                total_emails = len(emails)
-
-                progress_bar = st.progress(0)
-                status_text = st.empty()  # Placeholder for dynamic count update
-
-                def update_progress(value):
-                    progress_bar.progress(value)
-
-                def update_status(text):
-                    status_text.write(text)
-
-                # Run async email validation
-                valid_emails = asyncio.run(process_emails(emails, update_progress, update_status))
-
-                valid_df = df[df[email_column].isin(valid_emails)]
-                
-                result_filename = f"valid_{uploaded_file.name}"
-                csv_buffer = io.StringIO()
-                valid_df.to_csv(csv_buffer, index=False)
-                csv_data = csv_buffer.getvalue()
-                
-                st.write("### Results")
-                st.dataframe(valid_df)
-                st.download_button(
-                    label="Download Valid Emails CSV",
-                    data=csv_data,
-                    file_name=result_filename,
-                    mime="text/csv"
-                )
-            else:
-                st.error("The uploaded CSV does not contain a column named 'email' or 'Email'.")
-        except Exception as e:
-            st.error(f"Error processing the file: {e}")
+elif option == "Ba
