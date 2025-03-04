@@ -1,19 +1,18 @@
 import streamlit as st
 import pandas as pd
-import aiosmtplib
-import dns.asyncresolver
-import asyncio
+import smtplib
+import dns.resolver
 from email.utils import parseaddr
 import time
 import io
 
-async def get_mx_record(domain):
-    """Get the MX record for the given domain asynchronously."""
+def get_mx_record(domain):
+    """Get the MX record for the given domain with timeout."""
     try:
-        resolver = dns.asyncresolver.Resolver()
+        resolver = dns.resolver.Resolver()
         resolver.timeout = 2  # Set timeout to 2 seconds
         resolver.lifetime = 2
-        records = await resolver.resolve(domain, 'MX')
+        records = resolver.resolve(domain, 'MX')
         mx_record = sorted(records, key=lambda r: r.preference)[0].exchange.to_text()
         return mx_record
     except Exception:
@@ -25,50 +24,36 @@ def validate_email_syntax(email):
         return False
     return True
 
-async def check_email_reachability(email):
-    """Check if the email is reachable via SMTP asynchronously."""
+def check_email_reachability(email):
+    """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
         return False, "Invalid email syntax."
     
     address = parseaddr(email)[1]
     domain = address.split('@')[1]
     
-    mx_record = await get_mx_record(domain)
+    mx_record = get_mx_record(domain)
     if not mx_record:
         return False, f"Domain '{domain}' does not have valid MX records."
     
     try:
-        client = aiosmtplib.SMTP(timeout=3)
-        await client.connect(mx_record, 25)
-        await client.helo()
-        await client.mail("test@example.com")
-        code, message = await client.rcpt(email)
-        await client.quit()
-
+        server = smtplib.SMTP(mx_record, 25, timeout=3)
+        server.helo()
+        server.mail("test@example.com")
+        code, message = server.rcpt(email)
+        
         if code == 250:
             return True, "VALID"
         return False, "Invalid"
     except Exception:
         return False, "SMTP error"
+    finally:
+        try:
+            server.quit()
+        except:
+            pass
 
-async def process_emails(emails, update_progress, update_status):
-    """Process emails asynchronously and update UI."""
-    valid_rows = []
-    total_emails = len(emails)
-
-    async def process_single_email(idx, email):
-        is_valid, message = await check_email_reachability(email)
-        if is_valid:
-            valid_rows.append(email)
-        update_progress((idx + 1) / total_emails)
-        update_status(f"Processing {idx + 1}/{total_emails} emails...")
-
-    tasks = [process_single_email(idx, email) for idx, email in enumerate(emails)]
-    await asyncio.gather(*tasks)
-
-    return valid_rows
-
-st.title("Email Validity and Reachability Checker (Async)")
+st.title("Email Validity and Reachability Checker")
 st.write("Validate email addresses either individually or in bulk using a CSV file.")
 
 option = st.radio("Select Mode", ["Single Email", "Batch (CSV File)"])
@@ -78,9 +63,7 @@ if option == "Single Email":
     if st.button("Validate Email"):
         if email:
             start_time = time.time()
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            is_valid, message = loop.run_until_complete(check_email_reachability(email))
+            is_valid, message = check_email_reachability(email)
             elapsed_time = time.time() - start_time
             
             st.write("### Results")
@@ -90,4 +73,52 @@ if option == "Single Email":
         else:
             st.error("Please enter a valid email address.")
 
-elif option == "Ba
+elif option == "Batch (CSV File)":
+    uploaded_file = st.file_uploader("Upload a CSV File", type=["csv"])
+    
+    if uploaded_file:
+        try:
+            df = pd.read_csv(uploaded_file)
+            email_column = None
+            for col in df.columns:
+                if col.lower() == "email":
+                    email_column = col
+                    break
+            
+            if email_column:
+                st.write(f"Found '{email_column}' column. Processing emails...")
+
+                emails = df[email_column].dropna().unique()
+                valid_rows = []
+                total_emails = len(emails)
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()  # Placeholder for dynamic count update
+
+                for idx, email in enumerate(emails):
+                    is_valid, message = check_email_reachability(email)
+                    if is_valid:
+                        valid_rows.append(email)
+
+                    progress_bar.progress((idx + 1) / total_emails)
+                    status_text.write(f"Processing {idx + 1}/{total_emails} emails...")
+
+                valid_df = df[df[email_column].isin(valid_rows)]
+                
+                result_filename = f"valid_{uploaded_file.name}"
+                csv_buffer = io.StringIO()
+                valid_df.to_csv(csv_buffer, index=False)
+                csv_data = csv_buffer.getvalue()
+                
+                st.write("### Results")
+                st.dataframe(valid_df)
+                st.download_button(
+                    label="Download Valid Emails CSV",
+                    data=csv_data,
+                    file_name=result_filename,
+                    mime="text/csv"
+                )
+            else:
+                st.error("The uploaded CSV does not contain a column named 'email' or 'Email'.")
+        except Exception as e:
+            st.error(f"Error processing the file: {e}")
