@@ -7,13 +7,17 @@ import time
 import io
 
 def get_mx_record(domain):
-    """Get the MX record for the given domain."""
+    """Get the MX record for the given domain with timeout."""
     try:
-        records = dns.resolver.resolve(domain, 'MX')
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 2  # Set timeout to 2 seconds
+        resolver.lifetime = 2
+        records = resolver.resolve(domain, 'MX')
         mx_record = sorted(records, key=lambda r: r.preference)[0].exchange.to_text()
         return mx_record
     except Exception:
         return None
+
 
 def validate_email_syntax(email):
     """Validates the syntax of the email address."""
@@ -22,6 +26,7 @@ def validate_email_syntax(email):
     return True
 
 def check_email_reachability(email):
+    print(email)
     """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
         return False, "Invalid email syntax."
@@ -34,7 +39,7 @@ def check_email_reachability(email):
         return False, f"Domain '{domain}' does not have valid MX records."
     
     try:
-        server = smtplib.SMTP(mx_record, 25)
+        server = smtplib.SMTP(mx_record, 25, timeout=3)
         server.helo()
         server.mail("test@example.com")
         code, message = server.rcpt(email)
