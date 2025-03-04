@@ -18,7 +18,6 @@ def get_mx_record(domain):
     except Exception:
         return None
 
-
 def validate_email_syntax(email):
     """Validates the syntax of the email address."""
     if "@" not in email or "." not in email.split("@")[1]:
@@ -26,6 +25,7 @@ def validate_email_syntax(email):
     return True
 
 def check_email_reachability(email):
+    """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
         return False, "Invalid email syntax."
     
@@ -87,18 +87,22 @@ elif option == "Batch (CSV File)":
             
             if email_column:
                 st.write(f"Found '{email_column}' column. Processing emails...")
+
                 emails = df[email_column].dropna().unique()
-                
                 valid_rows = []
-                progress_bar = st.progress(0)
                 total_emails = len(emails)
-                
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()  # Placeholder for dynamic count update
+
                 for idx, email in enumerate(emails):
                     is_valid, message = check_email_reachability(email)
                     if is_valid:
                         valid_rows.append(email)
+
                     progress_bar.progress((idx + 1) / total_emails)
-                
+                    status_text.write(f"Processing {idx + 1}/{total_emails} emails...")
+
                 valid_df = df[df[email_column].isin(valid_rows)]
                 
                 result_filename = f"valid_{uploaded_file.name}"
