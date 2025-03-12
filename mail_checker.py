@@ -24,17 +24,17 @@ def validate_email_syntax(email):
         return False
     return True
 
-def is_catch_all_domain(server, domain):
+def is_catch_all_domain(server, domain, sender_email):
     """Checks if the domain is a catch-all by testing a fake email."""
     fake_email = f"nonexistent_{int(time.time())}@{domain}"
     try:
-        server.mail("test@example.com")
+        server.mail(sender_email)
         code, _ = server.rcpt(fake_email)
         return code == 250  # If it accepts a non-existent email, it's a catch-all domain
     except Exception:
         return False
 
-def check_email_reachability(email):
+def check_email_reachability(email, sender_email):
     """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
         return False, "Invalid email syntax."
@@ -49,16 +49,16 @@ def check_email_reachability(email):
     try:
         server = smtplib.SMTP(mx_record, 25, timeout=3)
         server.helo()
-        server.mail("test@example.com")
+        server.mail(sender_email)
         code, message = server.rcpt(email)
         
         if code == 250:
-            if is_catch_all_domain(server, domain):
-                return True, "VALID (Catch-All Detected)"
+            if is_catch_all_domain(server, domain, sender_email):
+                return False, "Invalid (Catch-All Domain)"
             return True, "VALID"
-        return False, "Invalid"
-    except Exception:
-        return False, "SMTP error"
+        return False, f"Invalid: {message.decode('utf-8', 'ignore')}"
+    except Exception as e:
+        return False, f"SMTP error: {str(e)}"
     finally:
         try:
             server.quit()
@@ -68,6 +68,8 @@ def check_email_reachability(email):
 st.title("Email Validity and Reachability Checker")
 st.write("Validate email addresses either individually or in bulk using a CSV file.")
 
+sender_email = st.text_input("Enter Sender Email Address", "test@example.com")
+
 option = st.radio("Select Mode", ["Single Email", "Batch (CSV File)"])
 
 if option == "Single Email":
@@ -75,7 +77,7 @@ if option == "Single Email":
     if st.button("Validate Email"):
         if email:
             start_time = time.time()
-            is_valid, message = check_email_reachability(email)
+            is_valid, message = check_email_reachability(email, sender_email)
             elapsed_time = time.time() - start_time
             
             st.write("### Results")
@@ -101,31 +103,30 @@ elif option == "Batch (CSV File)":
                 st.write(f"Found '{email_column}' column. Processing emails...")
 
                 emails = df[email_column].dropna().unique()
-                valid_rows = []
+                results = []
                 total_emails = len(emails)
 
                 progress_bar = st.progress(0)
                 status_text = st.empty()  # Placeholder for dynamic count update
 
                 for idx, email in enumerate(emails):
-                    is_valid, message = check_email_reachability(email)
-                    if is_valid:
-                        valid_rows.append(email)
-
+                    is_valid, message = check_email_reachability(email, sender_email)
+                    results.append({"Email": email, "Status": "Valid" if is_valid else "Invalid", "Message": message})
+                    
                     progress_bar.progress((idx + 1) / total_emails)
                     status_text.write(f"Processing {idx + 1}/{total_emails} emails...")
 
-                valid_df = df[df[email_column].isin(valid_rows)]
+                result_df = pd.DataFrame(results)
                 
-                result_filename = f"valid_{uploaded_file.name}"
+                result_filename = f"email_validation_results_{uploaded_file.name}"
                 csv_buffer = io.StringIO()
-                valid_df.to_csv(csv_buffer, index=False)
+                result_df.to_csv(csv_buffer, index=False)
                 csv_data = csv_buffer.getvalue()
                 
                 st.write("### Results")
-                st.dataframe(valid_df)
+                st.dataframe(result_df)
                 st.download_button(
-                    label="Download Valid Emails CSV",
+                    label="Download Email Validation Results CSV",
                     data=csv_data,
                     file_name=result_filename,
                     mime="text/csv"
