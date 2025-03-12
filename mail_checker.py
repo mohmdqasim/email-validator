@@ -67,9 +67,12 @@ def check_email_reachability(email):
         code, message = server.rcpt(email)
         server.quit()
         
+        is_catch_all_domain, catch_all_message = is_catch_all(domain)
+        if is_catch_all_domain:
+            return False, "Invalid (Catch-All Domain)", catch_all_message
+        
         if code == 250:
-            is_catch_all_domain, catch_all_message = is_catch_all(domain)
-            return True, "VALID", catch_all_message
+            return True, "VALID", None
         return False, "Invalid", None
     except Exception:
         return False, "SMTP error", None
@@ -112,9 +115,8 @@ elif option == "Batch (CSV File)":
                 st.write(f"Found '{email_column}' column. Processing emails...")
 
                 emails = df[email_column].dropna().unique()
-                valid_rows = []
                 results = []
-
+                
                 total_emails = len(emails)
                 progress_bar = st.progress(0)
                 status_text = st.empty()  # Placeholder for dynamic count update
@@ -123,16 +125,12 @@ elif option == "Batch (CSV File)":
                     is_valid, message, catch_all_status = check_email_reachability(email)
                     results.append([email, message, catch_all_status])
                     
-                    if is_valid:
-                        valid_rows.append(email)
-
                     progress_bar.progress((idx + 1) / total_emails)
                     status_text.write(f"Processing {idx + 1}/{total_emails} emails...")
 
                 result_df = pd.DataFrame(results, columns=["Email", "Status", "Catch-All"])
-                valid_df = df[df[email_column].isin(valid_rows)]
                 
-                result_filename = f"valid_{uploaded_file.name}"
+                result_filename = f"validated_{uploaded_file.name}"
                 csv_buffer = io.StringIO()
                 result_df.to_csv(csv_buffer, index=False)
                 csv_data = csv_buffer.getvalue()
