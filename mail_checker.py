@@ -61,7 +61,7 @@ def check_email_reachability(email):
         return False, f"Domain '{domain}' does not have valid MX records.", None
     
     try:
-        server = smtplib.SMTP(mx_record, 25, timeout=10)
+        server = smtplib.SMTP(mx_record, 25)
         server.helo()
         server.mail("test@example.com")
         code, message = server.rcpt(email)
