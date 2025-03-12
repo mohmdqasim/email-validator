@@ -24,7 +24,7 @@ def validate_email_syntax(email):
         return False
     return True
 
-def is_catch_all_domain(server, test_email, domain):
+def is_catch_all_domain(server, domain):
     """Checks if the domain is a catch-all by testing a fake email."""
     fake_email = f"nonexistent_{int(time.time())}@{domain}"
     try:
@@ -53,8 +53,8 @@ def check_email_reachability(email):
         code, message = server.rcpt(email)
         
         if code == 250:
-            if is_catch_all_domain(server, email, domain):
-                return False, "Invalid (Catch-All Domain)"
+            if is_catch_all_domain(server, domain):
+                return True, "VALID (Catch-All Detected)"
             return True, "VALID"
         return False, "Invalid"
     except Exception:
