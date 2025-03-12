@@ -5,6 +5,8 @@ import dns.resolver
 from email.utils import parseaddr
 import time
 import io
+import random
+import string
 
 def get_mx_record(domain):
     """Get the MX record for the given domain with timeout."""
@@ -24,34 +26,53 @@ def validate_email_syntax(email):
         return False
     return True
 
+def is_catch_all(domain):
+    """Check if the domain has a catch-all email configuration."""
+    mx_record = get_mx_record(domain)
+    if not mx_record:
+        return False, "No MX records found."
+
+    test_email = f"{''.join(random.choices(string.ascii_lowercase, k=10))}@{domain}"
+
+    try:
+        server = smtplib.SMTP(mx_record, 25, timeout=3)
+        server.helo()
+        server.mail("test@example.com")
+        code, _ = server.rcpt(test_email)
+        server.quit()
+
+        if code == 250:
+            return True, "Catch-All Detected"
+        else:
+            return False, "No Catch-All"
+    except Exception:
+        return False, "SMTP Error"
+
 def check_email_reachability(email):
     """Check if the email is reachable via SMTP."""
     if not validate_email_syntax(email):
-        return False, "Invalid email syntax."
+        return False, "Invalid email syntax.", None
     
     address = parseaddr(email)[1]
     domain = address.split('@')[1]
     
     mx_record = get_mx_record(domain)
     if not mx_record:
-        return False, f"Domain '{domain}' does not have valid MX records."
+        return False, f"Domain '{domain}' does not have valid MX records.", None
     
     try:
         server = smtplib.SMTP(mx_record, 25, timeout=3)
         server.helo()
         server.mail("test@example.com")
         code, message = server.rcpt(email)
+        server.quit()
         
         if code == 250:
-            return True, "VALID"
-        return False, "Invalid"
+            is_catch_all_domain, catch_all_message = is_catch_all(domain)
+            return True, "VALID", catch_all_message
+        return False, "Invalid", None
     except Exception:
-        return False, "SMTP error"
-    finally:
-        try:
-            server.quit()
-        except:
-            pass
+        return False, "SMTP error", None
 
 st.title("Email Validity and Reachability Checker")
 st.write("Validate email addresses either individually or in bulk using a CSV file.")
@@ -63,12 +84,14 @@ if option == "Single Email":
     if st.button("Validate Email"):
         if email:
             start_time = time.time()
-            is_valid, message = check_email_reachability(email)
+            is_valid, message, catch_all_status = check_email_reachability(email)
             elapsed_time = time.time() - start_time
             
             st.write("### Results")
             st.write(f"**Email:** {email}")
             st.write(f"**Message:** {message}")
+            if catch_all_status:
+                st.write(f"**Catch-All Status:** {catch_all_status}")
             st.write(f"**Time Taken:** {elapsed_time:.2f} seconds")
         else:
             st.error("Please enter a valid email address.")
@@ -90,30 +113,34 @@ elif option == "Batch (CSV File)":
 
                 emails = df[email_column].dropna().unique()
                 valid_rows = []
-                total_emails = len(emails)
+                results = []
 
+                total_emails = len(emails)
                 progress_bar = st.progress(0)
                 status_text = st.empty()  # Placeholder for dynamic count update
 
                 for idx, email in enumerate(emails):
-                    is_valid, message = check_email_reachability(email)
+                    is_valid, message, catch_all_status = check_email_reachability(email)
+                    results.append([email, message, catch_all_status])
+                    
                     if is_valid:
                         valid_rows.append(email)
 
                     progress_bar.progress((idx + 1) / total_emails)
                     status_text.write(f"Processing {idx + 1}/{total_emails} emails...")
 
+                result_df = pd.DataFrame(results, columns=["Email", "Status", "Catch-All"])
                 valid_df = df[df[email_column].isin(valid_rows)]
                 
                 result_filename = f"valid_{uploaded_file.name}"
                 csv_buffer = io.StringIO()
-                valid_df.to_csv(csv_buffer, index=False)
+                result_df.to_csv(csv_buffer, index=False)
                 csv_data = csv_buffer.getvalue()
                 
                 st.write("### Results")
-                st.dataframe(valid_df)
+                st.dataframe(result_df)
                 st.download_button(
-                    label="Download Valid Emails CSV",
+                    label="Download Results CSV",
                     data=csv_data,
                     file_name=result_filename,
                     mime="text/csv"
