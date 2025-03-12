@@ -56,7 +56,12 @@ def check_email_reachability(email, sender_email):
             if is_catch_all_domain(server, domain, sender_email):
                 return False, "Invalid (Catch-All Domain)"
             return True, "VALID"
-        return False, f"Invalid: {message.decode('utf-8', 'ignore')}"
+        
+        message_str = message.decode('utf-8', 'ignore')
+        if "Spamhaus" in message_str:
+            return False, "Invalid: Your IP is blocked by Spamhaus. Consider using an alternative SMTP provider."
+        
+        return False, f"Invalid: {message_str}"
     except Exception as e:
         return False, f"SMTP error: {str(e)}"
     finally:
