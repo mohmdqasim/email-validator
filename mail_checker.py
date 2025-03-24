@@ -300,6 +300,7 @@ elif option == "Batch (CSV File)":
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file)
+            original_df = df.copy()  # Keep a copy of the original data
             
             # More flexible column detection
             email_columns = [col for col in df.columns if 'email' in col.lower()]
@@ -314,21 +315,30 @@ elif option == "Batch (CSV File)":
             if st.button("Start Validation"):
                 st.write(f"Processing '{email_column}' column...")
 
-                emails = df[email_column].dropna().astype(str).unique()
-                results = []
-                total_emails = len(emails)
+                # Create a dictionary to store validation results
+                validation_results = {}
+                unique_emails = df[email_column].dropna().astype(str).unique()
+                total_emails = len(unique_emails)
 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 result_area = st.empty()
+                results = []
 
                 # Process emails in smaller batches
-                for idx, email in enumerate(emails):
+                for idx, email in enumerate(unique_emails):
                     status_text.write(f"Processing {idx + 1}/{total_emails}: {email}")
                     is_valid, message = check_email_reachability(email, sender_email, disposable_domains)
+                    
+                    # Store the result in dictionary for later use with original dataframe
+                    validation_results[email] = {
+                        "Status": "Valid" if is_valid else "Invalid",
+                        "Message": message
+                    }
+                    
                     results.append({
-                        "Email": email, 
-                        "Status": "Valid" if is_valid else "Invalid", 
+                        "Email": email,
+                        "Status": "Valid" if is_valid else "Invalid",
                         "Message": message
                     })
                     
@@ -350,7 +360,20 @@ elif option == "Batch (CSV File)":
                             
                             st.dataframe(temp_df.tail(10))
 
+                # Create results dataframe for display
                 result_df = pd.DataFrame(results)
+                
+                # Add status and message to original dataframe
+                original_df["Status"] = original_df[email_column].map(
+                    lambda x: validation_results.get(str(x), {}).get("Status", "Unknown") if pd.notna(x) else "Unknown"
+                )
+                original_df["Validation_Message"] = original_df[email_column].map(
+                    lambda x: validation_results.get(str(x), {}).get("Message", "") if pd.notna(x) else ""
+                )
+                
+                # Create separate dataframes for valid and invalid emails
+                valid_df = original_df[original_df["Status"] == "Valid"]
+                invalid_df = original_df[original_df["Status"] == "Invalid"]
                 
                 # Add summary statistics
                 valid_count = result_df[result_df["Status"] == "Valid"].shape[0]
@@ -371,20 +394,56 @@ elif option == "Batch (CSV File)":
                 st.write("### Error Types")
                 st.bar_chart(error_counts)
                 
-                st.write("### Results")
+                st.write("### Results Overview")
                 st.dataframe(result_df)
                 
-                # Export results
-                csv_buffer = io.StringIO()
-                result_df.to_csv(csv_buffer, index=False)
-                csv_data = csv_buffer.getvalue()
+                timestamp = time.strftime('%Y%m%d_%H%M%S')
                 
-                st.download_button(
-                    label="Download Validation Results CSV",
-                    data=csv_data,
-                    file_name=f"email_validation_results_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
+                # Export full results with original data
+                full_csv_buffer = io.StringIO()
+                original_df.to_csv(full_csv_buffer, index=False)
+                full_csv_data = full_csv_buffer.getvalue()
+                
+                # Export valid emails only
+                valid_csv_buffer = io.StringIO()
+                valid_df.to_csv(valid_csv_buffer, index=False)
+                valid_csv_data = valid_csv_buffer.getvalue()
+                
+                # Export invalid emails only
+                invalid_csv_buffer = io.StringIO()
+                invalid_df.to_csv(invalid_csv_buffer, index=False)
+                invalid_csv_data = invalid_csv_buffer.getvalue()
+                
+                # Display download buttons
+                st.write("### Download Results")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.download_button(
+                        label="Download All Results",
+                        data=full_csv_data,
+                        file_name=f"email_validation_all_{timestamp}.csv",
+                        mime="text/csv"
+                    )
+                
+                with col2:
+                    st.download_button(
+                        label="Download Valid Emails Only",
+                        data=valid_csv_data,
+                        file_name=f"email_validation_valid_{timestamp}.csv",
+                        mime="text/csv",
+                        disabled=(valid_count == 0)
+                    )
+                
+                with col3:
+                    st.download_button(
+                        label="Download Invalid Emails Only",
+                        data=invalid_csv_data,
+                        file_name=f"email_validation_invalid_{timestamp}.csv",
+                        mime="text/csv",
+                        disabled=(invalid_count == 0)
+                    )
+                
         except Exception as e:
             st.error(f"Error processing the file: {e}")
             st.error(f"Details: {type(e).__name__}")
