@@ -257,6 +257,19 @@ with st.expander("Advanced Settings"):
     with col2:
         verification_timeout = st.slider("Verification Timeout (seconds)", 3, 15, 7,
                                         help="Maximum time to wait for server responses")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        batch_delay = st.slider("Delay Between Emails (seconds)", 0.1, 3.0, 0.5, 
+                               help="Delay between checking individual emails in batch mode")
+    with col2:
+        domain_delay = st.slider("Delay Between Domains (seconds)", 1.0, 10.0, 2.0,
+                                help="Delay between checking different domains in batch mode")
+    
+    skip_smtp_verification = st.checkbox("Skip detailed SMTP verification (faster but less accurate)", False,
+                                       help="Only check domain MX records and syntax, skip actual mailbox verification")
+    treat_catchall_as_valid = st.checkbox("Treat catch-all domains as valid", True,
+                                        help="Mark emails on catch-all domains as valid instead of invalid")
 
 option = st.radio("Select Mode", ["Single Email", "Batch (CSV File)"])
 
@@ -323,43 +336,270 @@ elif option == "Batch (CSV File)":
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 result_area = st.empty()
+                
+                # Group emails by domain for more efficient processing
+                domains_to_check = {}
+                for email in unique_emails:
+                    if '@' in email:
+                        domain = email.split('@')[1].lower()
+                        if domain not in domains_to_check:
+                            domains_to_check[domain] = []
+                        domains_to_check[domain].append(email)
+                    else:
+                        # Handle invalid emails without domain
+                        validation_results[email] = {
+                            "Status": "Invalid",
+                            "Message": "Invalid email format"
+                        }
+                
                 results = []
-
-                # Process emails in smaller batches
-                for idx, email in enumerate(unique_emails):
-                    status_text.write(f"Processing {idx + 1}/{total_emails}: {email}")
-                    is_valid, message = check_email_reachability(email, sender_email, disposable_domains)
+                processed_count = 0
+                domain_count = 0
+                total_domains = len(domains_to_check)
+                
+                # Process emails grouped by domain
+                for domain, emails in domains_to_check.items():
+                    domain_count += 1
+                    status_text.write(f"Processing domain {domain_count}/{total_domains}: {domain}")
                     
-                    # Store the result in dictionary for later use with original dataframe
-                    validation_results[email] = {
-                        "Status": "Valid" if is_valid else "Invalid",
-                        "Message": message
-                    }
+                    # Check domain validity first
+                    is_valid_syntax = True
+                    for email in emails:
+                        if not validate_email_syntax(email):
+                            is_valid_syntax = False
+                            validation_results[email] = {
+                                "Status": "Invalid",
+                                "Message": "Invalid email syntax"
+                            }
+                            results.append({
+                                "Email": email,
+                                "Status": "Invalid",
+                                "Message": "Invalid email syntax"
+                            })
+                            processed_count += 1
+                            progress_bar.progress(processed_count / total_emails)
                     
-                    results.append({
-                        "Email": email,
-                        "Status": "Valid" if is_valid else "Invalid",
-                        "Message": message
-                    })
+                    if not is_valid_syntax:
+                        continue
                     
-                    progress_bar.progress((idx + 1) / total_emails)
+                    # Check MX records and server validity
+                    mx_record = get_mx_record(domain)
+                    smtp_valid = mx_record and verify_smtp_server(mx_record, domain)
+                    is_disposable = domain.lower() in disposable_domains
                     
-                    # Display intermediate results
-                    if (idx + 1) % 10 == 0 or idx == total_emails - 1:
-                        temp_df = pd.DataFrame(results)
-                        valid_count = temp_df[temp_df["Status"] == "Valid"].shape[0]
-                        invalid_count = temp_df[temp_df["Status"] == "Invalid"].shape[0]
+                    # Skip detailed SMTP check if domain is invalid or disposable
+                    if not mx_record or not smtp_valid or is_disposable:
+                        for email in emails:
+                            message = "Disposable email address detected" if is_disposable else "Invalid domain"
+                            if not mx_record:
+                                message = f"Domain '{domain}' has no valid MX records"
+                            elif not smtp_valid:
+                                message = f"SMTP server for '{domain}' is not accessible"
+                                
+                            validation_results[email] = {
+                                "Status": "Invalid",
+                                "Message": message
+                            }
+                            results.append({
+                                "Email": email,
+                                "Status": "Invalid",
+                                "Message": message
+                            })
+                            processed_count += 1
+                            progress_bar.progress(processed_count / total_emails)
+                        continue
+                    
+                    # If user selected to skip detailed verification, mark all emails as valid
+                    if skip_smtp_verification:
+                        for email in emails:
+                            validation_results[email] = {
+                                "Status": "Valid",
+                                "Message": "Valid (Domain verified, SMTP check skipped)"
+                            }
+                            results.append({
+                                "Email": email,
+                                "Status": "Valid",
+                                "Message": "Valid (Domain verified, SMTP check skipped)"
+                            })
+                            processed_count += 1
+                            progress_bar.progress(processed_count / total_emails)
+                        continue
+                    
+                    # For valid domains, perform SMTP verification
+                    server = None
+                    try:
+                        # Connect once per domain
+                        server = smtplib.SMTP(timeout=verification_timeout)
+                        connected = False
                         
-                        with result_area.container():
-                            st.write(f"### Intermediate Results ({idx + 1}/{total_emails})")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric("Valid Emails", valid_count)
-                            with col2:
-                                st.metric("Invalid Emails", invalid_count)
+                        # Try different ports
+                        for port in [25, 587]:
+                            try:
+                                server.connect(mx_record, port)
+                                server.ehlo_or_helo_if_needed()
+                                connected = True
+                                break
+                            except:
+                                continue
+                        
+                        if not connected:
+                            # All emails for this domain are invalid
+                            for email in emails:
+                                validation_results[email] = {
+                                    "Status": "Invalid",
+                                    "Message": "Failed to connect to email server"
+                                }
+                                results.append({
+                                    "Email": email,
+                                    "Status": "Invalid",
+                                    "Message": "Failed to connect to email server"
+                                })
+                                processed_count += 1
+                                progress_bar.progress(processed_count / total_emails)
+                            continue
+                        
+                        # Check if it's a catch-all domain (only once per domain)
+                        is_catchall = False
+                        try:
+                            server.mail(sender_email)
+                            fake_email = f"nonexistent{int(time.time())}@{domain}"
+                            code, _ = server.rcpt(fake_email)
+                            is_catchall = (code == 250)
+                        except:
+                            pass
+                        
+                        # Now check each email
+                        for email in emails:
+                            status_text.write(f"Processing {processed_count + 1}/{total_emails}: {email}")
                             
-                            st.dataframe(temp_df.tail(10))
-
+                            if is_catchall:
+                                # Handle catch-all domains based on user preference
+                                if treat_catchall_as_valid:
+                                    validation_results[email] = {
+                                        "Status": "Valid",
+                                        "Message": "Valid (Catch-all domain)"
+                                    }
+                                    results.append({
+                                        "Email": email,
+                                        "Status": "Valid",
+                                        "Message": "Valid (Catch-all domain)"
+                                    })
+                                else:
+                                    validation_results[email] = {
+                                        "Status": "Invalid",
+                                        "Message": "Invalid (Catch-all domain)"
+                                    }
+                                    results.append({
+                                        "Email": email,
+                                        "Status": "Invalid",
+                                        "Message": "Invalid (Catch-all domain)"
+                                    })
+                            else:
+                                try:
+                                    server.mail(sender_email)
+                                    code, message = server.rcpt(email)
+                                    
+                                    message_str = message.decode('utf-8', 'ignore') if hasattr(message, 'decode') else str(message)
+                                    
+                                    if code == 250:
+                                        validation_results[email] = {
+                                            "Status": "Valid",
+                                            "Message": "VALID"
+                                        }
+                                        results.append({
+                                            "Email": email,
+                                            "Status": "Valid",
+                                            "Message": "VALID"
+                                        })
+                                    else:
+                                        # Process specific error codes
+                                        if code == 550:
+                                            error_msg = "Mailbox not found"
+                                        elif code == 551:
+                                            error_msg = "User not local or invalid address"
+                                        elif code == 552:
+                                            error_msg = "Mailbox full"
+                                        elif code == 553:
+                                            error_msg = "Mailbox name invalid"
+                                        elif code == 450:
+                                            error_msg = "Mailbox temporarily unavailable"
+                                        elif code == 451:
+                                            error_msg = "Local error in processing"
+                                        elif code == 452:
+                                            error_msg = "Insufficient system storage"
+                                        elif code == 421:
+                                            error_msg = "Service not available"
+                                        else:
+                                            error_msg = f"Invalid: SMTP Error {code} - {message_str}"
+                                        
+                                        validation_results[email] = {
+                                            "Status": "Invalid",
+                                            "Message": error_msg
+                                        }
+                                        results.append({
+                                            "Email": email,
+                                            "Status": "Invalid",
+                                            "Message": error_msg
+                                        })
+                                except Exception as e:
+                                    validation_results[email] = {
+                                        "Status": "Invalid",
+                                        "Message": f"SMTP Error: {str(e)}"
+                                    }
+                                    results.append({
+                                        "Email": email,
+                                        "Status": "Invalid",
+                                        "Message": f"SMTP Error: {str(e)}"
+                                    })
+                            
+                            processed_count += 1
+                            progress_bar.progress(processed_count / total_emails)
+                            
+                            # Display intermediate results
+                            if processed_count % 10 == 0 or processed_count == total_emails:
+                                temp_df = pd.DataFrame(results)
+                                valid_count = len(temp_df[temp_df["Status"] == "Valid"])
+                                invalid_count = len(temp_df[temp_df["Status"] == "Invalid"])
+                                
+                                with result_area.container():
+                                    st.write(f"### Intermediate Results ({processed_count}/{total_emails})")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.metric("Valid Emails", valid_count)
+                                    with col2:
+                                        st.metric("Invalid Emails", invalid_count)
+                                    
+                                    st.dataframe(temp_df.tail(10))
+                            
+                            # Add small delay between checks within same domain
+                            time.sleep(batch_delay)
+                            
+                    except Exception as e:
+                        # If there's an error with the domain, mark all remaining emails as invalid
+                        for email in emails:
+                            if email not in validation_results:
+                                validation_results[email] = {
+                                    "Status": "Invalid",
+                                    "Message": f"Domain error: {str(e)}"
+                                }
+                                results.append({
+                                    "Email": email,
+                                    "Status": "Invalid",
+                                    "Message": f"Domain error: {str(e)}"
+                                })
+                                processed_count += 1
+                                progress_bar.progress(processed_count / total_emails)
+                    finally:
+                        # Ensure server is closed properly
+                        try:
+                            if server:
+                                server.quit()
+                        except:
+                            pass
+                    
+                    # Add delay between domains to avoid rate limiting
+                    time.sleep(domain_delay)
+                
                 # Create results dataframe for display
                 result_df = pd.DataFrame(results)
                 
@@ -376,8 +616,8 @@ elif option == "Batch (CSV File)":
                 invalid_df = original_df[original_df["Status"] == "Invalid"]
                 
                 # Add summary statistics
-                valid_count = result_df[result_df["Status"] == "Valid"].shape[0]
-                invalid_count = result_df[result_df["Status"] == "Invalid"].shape[0]
+                valid_count = len(result_df[result_df["Status"] == "Valid"])
+                invalid_count = len(result_df[result_df["Status"] == "Invalid"])
                 
                 st.write("### Final Summary")
                 col1, col2, col3 = st.columns(3)
@@ -389,10 +629,11 @@ elif option == "Batch (CSV File)":
                     st.metric("Total Processed", total_emails)
                 
                 # Group by error message types
-                error_counts = result_df[result_df["Status"] == "Invalid"]["Message"].value_counts()
-                
-                st.write("### Error Types")
-                st.bar_chart(error_counts)
+                if "Message" in result_df.columns and len(result_df[result_df["Status"] == "Invalid"]) > 0:
+                    error_counts = result_df[result_df["Status"] == "Invalid"]["Message"].value_counts()
+                    
+                    st.write("### Error Types")
+                    st.bar_chart(error_counts)
                 
                 st.write("### Results Overview")
                 st.dataframe(result_df)
