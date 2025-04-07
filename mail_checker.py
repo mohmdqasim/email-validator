@@ -33,8 +33,8 @@ def get_mx_record(domain):
     """Get the MX record for the given domain with improved timeout handling."""
     try:
         resolver = dns.resolver.Resolver()
-        resolver.timeout = 5  # Increased timeout for more reliable lookup
-        resolver.lifetime = 5
+        resolver.timeout = 1  # Increased timeout for more reliable lookup
+        resolver.lifetime = 3
         records = resolver.resolve(domain, 'MX')
         if records:
             mx_records = sorted([(r.preference, r.exchange.to_text()) for r in records], 
