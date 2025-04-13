@@ -10,6 +10,7 @@ import re
 import ssl
 import os
 
+@st.cache_data
 def load_disposable_domains(file_path='disposed_email.conf'):
     """Load disposable email domains from a configuration file."""
     try:
